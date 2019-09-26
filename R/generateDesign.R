@@ -90,87 +90,82 @@
 #'   makeNumericVectorParam("y", len = 2, lower = 0, upper = 1, trafo = function(x) x/sum(x))
 #' )
 #' generateDesign(10, ps, trafo = TRUE)
-generateDesign = function(n = 10L, par.set, fun, fun.args = list(), trafo = FALSE, augment = 20L) {
-
-  n = asInt(n)
-  z = doBasicGenDesignChecks(par.set)
-  lower = z$lower
-  upper = z$upper
-
-  requirePackages("lhs", why = "generateDesign", default.method = "load")
-  if (missing(fun))
-    fun = lhs::randomLHS
-  else
-    assertFunction(fun)
-  assertList(fun.args)
-  assertFlag(trafo)
-  augment = asInt(augment, lower = 0L)
-
-  ### precompute some useful stuff
-  pars = par.set$pars
-  lens = getParamLengths(par.set)
-  k = sum(lens)
-  pids = getParamIds(par.set, repeated = TRUE, with.nr = TRUE)
-  lower2 = setNames(rep(NA_real_, k), pids)
-  lower2 = insert(lower2, lower)
-  upper2 = setNames(rep(NA_real_, k), pids)
-  upper2 = insert(upper2, upper)
-  values = getParamSetValues(par.set)
-  types.df = getParamTypes(par.set, df.cols = TRUE)
-  types.int = convertTypesToCInts(types.df)
-  types.df[types.df == "factor"] = "character"
-  # ignore trafos if the user did not request transformed values
-  trafos = if(trafo)
-    lapply(pars, function(p) p$trafo)
-  else
-    replicate(length(pars), NULL, simplify = FALSE)
-  par.requires = lapply(pars, function(p) p$requires)
-
-
-  nmissing = n
-  # result objects
-  res = data.frame()
-  des = matrix(nrow = 0, ncol = k)
-  for (iter in seq_len(augment)) {
-    ### get design, types converted, trafos, conditionals set to NA
-    # create new design or augment if we already have some points
-    newdes = if (nmissing == n)
-      do.call(fun, insert(list(n = nmissing, k = k), fun.args))
-    else
-      lhs::randomLHS(nmissing, k = k)
-    # preallocate result for C
-    newres = makeDataFrame(nmissing, k, col.types = types.df)
-    newres = .Call(c_generateDesign, newdes, newres, types.int, lower2, upper2, values)
-    colnames(newres) = pids
-    # check each row if forbidden, then remove
-    if (hasForbidden(par.set)) {
-      #FIXME: this is pretty slow, but correct
-      fb = unlist(lapply(dfRowsToList(newres, par.set = par.set), function(x) {
-        isForbidden(x, par.set = par.set)
-      }))
-      newres = newres[!fb, , drop = FALSE]
-      newdes = newdes[!fb, , drop = FALSE]
+generateDesign = #modified generateDesign
+function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE, 
+          augment = 20L) 
+{
+  tryCatch({
+ 
+    n = asInt(n)
+    z = doBasicGenDesignChecks(par.set)
+    lower = z$lower
+    upper = z$upper
+    requirePackages("lhs", why = "generateDesign", default.method = "load")
+    if (missing(fun)) 
+      fun = lhs::randomLHS
+    else assertFunction(fun)
+    assertList(fun.args)
+    assertFlag(trafo)
+    augment = asInt(augment, lower = 0L)
+    pars = par.set$pars
+    lens = getParamLengths(par.set)
+    k = sum(lens)
+    pids = getParamIds(par.set, repeated = TRUE, with.nr = TRUE)
+    lower2 = setNames(rep(NA_real_, k), pids)
+    lower2 = insert(lower2, lower)
+    upper2 = setNames(rep(NA_real_, k), pids)
+    upper2 = insert(upper2, upper)
+    values = getParamSetValues(par.set)
+    types.df = getParamTypes(par.set, df.cols = TRUE)
+    types.int = convertTypesToCInts(types.df)
+    types.df[types.df == "factor"] = "character"
+    trafos = if (trafo) 
+      lapply(pars, function(p) p$trafo)
+    else replicate(length(pars), NULL, simplify = FALSE)
+    par.requires = lapply(pars, function(p) p$requires)
+    nmissing = n
+    res = data.frame()
+    des = matrix(nrow = 0, ncol = k)
+    for (iter in seq_len(augment)) {
+      newdes = if (nmissing == n) 
+        do.call(fun, insert(list(n = nmissing, k = k), fun.args))
+      else lhs::randomLHS(nmissing, k = k)
+      newres = makeDataFrame(nmissing, k, col.types = types.df)
+      newres = .Call(c_generateDesign, newdes, newres, types.int, 
+                     lower2, upper2, values)
+      colnames(newres) = pids
+      if (hasForbidden(par.set)) {
+        fb = unlist(lapply(dfRowsToList(newres, par.set = par.set), 
+                           function(x) {
+                             isForbidden(x, par.set = par.set)
+                           }))
+        newres = newres[!fb, , drop = FALSE]
+        newdes = newdes[!fb, , drop = FALSE]
+      }
+      newres = .Call(c_trafo_and_set_dep_to_na, newres, types.int, 
+                     names(pars), lens, trafos, par.requires, new.env())
+      des = rbind(des, newdes)
+      res = rbind(res, newres)
+      to.remove = duplicated(res)
+      des = des[!to.remove, , drop = FALSE]
+      res = res[!to.remove, , drop = FALSE]
+      nmissing = n - nrow(res)
+      if (nmissing == 0L) 
+        break
     }
-    newres = .Call(c_trafo_and_set_dep_to_na, newres, types.int, names(pars), lens, trafos, par.requires, new.env())
-    # add to result (design matrix and data.frame)
-    des = rbind(des, newdes)
-    res = rbind(res, newres)
-    # remove duplicates
-    to.remove = duplicated(res)
-    des = des[!to.remove, , drop = FALSE]
-    res = res[!to.remove, , drop = FALSE]
-    nmissing = n - nrow(res)
+    if (nrow(res) < n) 
+      warningf("generateDesign could only produce %i points instead of %i!", 
+               nrow(res), n)
+    colnames(res) = pids
+    res = fixDesignFactors(res, par.set)
+    attr(res, "trafo") = trafo
+    return(res)
+    
+  }, error=function(e){
+    cat0(as.character(e))
+    browser()
+  })
 
-    # Enough points? We are done!
-    if (nmissing == 0L)
-      break
-  }
-
-  if (nrow(res) < n)
-    warningf("generateDesign could only produce %i points instead of %i!", nrow(res), n)
-
-  colnames(res) = pids
-  res = fixDesignFactors(res, par.set)
-  attr(res, "trafo") = trafo
-  return(res)
 }
+
+#trace(generateDesign, edit=T)
