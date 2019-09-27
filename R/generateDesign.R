@@ -91,19 +91,32 @@
 #' )
 #' generateDesign(10, ps, trafo = TRUE)
 generateDesign = #modified generateDesign
+#
+
 function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE, 
           augment = 20L) 
 {
-  tryCatch({
- 
+  res_error = tryCatch({
+    if(1==2){
+      #temp je env iz debuga
+      n = temp$n
+      par.set = temp$par.set
+      fun = temp$fun
+      fun.args = temp$fun.args
+      trafo = temp$trafo
+      augment = temp$augment
+    }
+    
     n = asInt(n)
-    z = doBasicGenDesignChecks(par.set)
+    z = ParamHelpers:::doBasicGenDesignChecks(par.set)
     lower = z$lower
     upper = z$upper
     requirePackages("lhs", why = "generateDesign", default.method = "load")
-    if (missing(fun)) 
+    if (missing(fun)){
       fun = lhs::randomLHS
-    else assertFunction(fun)
+    } else {
+      assertFunction(fun)
+    }
     assertList(fun.args)
     assertFlag(trafo)
     augment = asInt(augment, lower = 0L)
@@ -115,37 +128,79 @@ function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE,
     lower2 = insert(lower2, lower)
     upper2 = setNames(rep(NA_real_, k), pids)
     upper2 = insert(upper2, upper)
-    values = getParamSetValues(par.set)
+    values = ParamHelpers:::getParamSetValues(par.set)
     types.df = getParamTypes(par.set, df.cols = TRUE)
-    types.int = convertTypesToCInts(types.df)
+    types.int = ParamHelpers:::convertTypesToCInts(types.df)
     types.df[types.df == "factor"] = "character"
-    trafos = if (trafo) 
-      lapply(pars, function(p) p$trafo)
-    else replicate(length(pars), NULL, simplify = FALSE)
+    if (trafo) {
+      trafos =   lapply(pars, function(p) p$trafo)
+    } else {
+      trafos = replicate(length(pars), NULL, simplify = FALSE)
+    }
     par.requires = lapply(pars, function(p) p$requires)
     nmissing = n
     res = data.frame()
     des = matrix(nrow = 0, ncol = k)
     for (iter in seq_len(augment)) {
-      newdes = if (nmissing == n) 
-        do.call(fun, insert(list(n = nmissing, k = k), fun.args))
-      else lhs::randomLHS(nmissing, k = k)
-      newres = makeDataFrame(nmissing, k, col.types = types.df)
-      newres = .Call(c_generateDesign, newdes, newres, types.int, 
-                     lower2, upper2, values)
-      colnames(newres) = pids
+      
+      if (nmissing == n) {
+        newdes1 = do.call(fun, insert(list(n = nmissing, k = k), 
+                                      fun.args))
+        ##DEBUG
+        if(1==2){
+          for(i in 1:1000000){
+            if(i%%1000==0){cat0(i)}
+            newdes = do.call(fun, insert(list(n = nmissing, k = k),
+                                         fun.args))
+            if(is.list(newdes)){
+              browser()
+            }
+          }
+        }
+        
+      }else{
+        newdes1= lhs::randomLHS(nmissing, k = k)
+      }
+      
+      if(is.list(newdes1)){
+        cat0("Newdes je list...")
+        browser()
+      }
+      
+      
+      newres1 = makeDataFrame(nmissing, k, col.types = types.df)
+      tryCatch({
+        newres2 = .Call(ParamHelpers:::c_generateDesign, newdes1, newres1, 
+                        types.int, lower2, upper2, values)
+      }, error=function(e){
+        cat0("Error v prvem C callu generateDesign | ",as.character(e))
+        browser()
+        stop(as.character(e))
+      })
+      
+      colnames(newres2) = pids
       if (hasForbidden(par.set)) {
-        fb = unlist(lapply(dfRowsToList(newres, par.set = par.set), 
+        fb = unlist(lapply(dfRowsToList(newres2, par.set = par.set), 
                            function(x) {
                              isForbidden(x, par.set = par.set)
                            }))
-        newres = newres[!fb, , drop = FALSE]
-        newdes = newdes[!fb, , drop = FALSE]
-      }
-      newres = .Call(c_trafo_and_set_dep_to_na, newres, types.int, 
-                     names(pars), lens, trafos, par.requires, new.env())
-      des = rbind(des, newdes)
-      res = rbind(res, newres)
+        newres2_temp =newres2
+        newdes1_temp = newdes1
+        newres2 = newres2[!fb, , drop = FALSE]
+        newdes1 = newdes1[!fb, , drop = FALSE]
+      } 
+      tryCatch({
+        newres3 = .Call(ParamHelpers:::c_trafo_and_set_dep_to_na, newres2, 
+                        types.int, names(pars), lens, trafos, par.requires, 
+                        new.env())
+      }, error=function(e){
+        cat0("Error v drugem C callu generateDesign | ",as.character(e))
+        browser()
+        stop(as.character(e))
+      })
+      
+      des = rbind(des, newdes1)
+      res = rbind(res, newres3)
       to.remove = duplicated(res)
       des = des[!to.remove, , drop = FALSE]
       res = res[!to.remove, , drop = FALSE]
@@ -157,15 +212,18 @@ function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE,
       warningf("generateDesign could only produce %i points instead of %i!", 
                nrow(res), n)
     colnames(res) = pids
-    res = fixDesignFactors(res, par.set)
+    res = ParamHelpers:::fixDesignFactors(res, par.set)
     attr(res, "trafo") = trafo
     return(res)
-    
-  }, error=function(e){
+  }, error = function(e) {
     cat0(as.character(e))
     browser()
+    cat0("returning trivial resultframe as design (min/min|max/max|max/min,...)...")
+    res_error = expand.grid(window = c(par.set$pars$window$lower, par.set$pars$window$upper), lag = c(par.set$pars$lag$lower,par.set$pars$lag$upper))
+    return(res_error)
   })
-
+  return(res_error)
 }
+
 
 #trace(generateDesign, edit=T)
