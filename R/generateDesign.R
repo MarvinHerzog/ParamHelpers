@@ -93,6 +93,8 @@
 generateDesign = #modified generateDesign
 #
 
+#
+
 function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE, 
           augment = 20L) 
 {
@@ -162,11 +164,29 @@ function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE,
         newdes1= lhs::randomLHS(nmissing, k = k)
       }
       
-      if(is.list(newdes1)){
-        cat0("Newdes je list...")
-        browser()
+      stability_iter = 1
+      while(stability_iter <= 5){
+        if(stability_iter > 1){
+          cat0("Unstable design encountered... retrying design LHS generation. Iter = ",stability_iter)
+        }
+        if(is.list(newdes1)){
+          cat0("Newdes je list...")
+          #browser()
+          og_newdes1 = newdes1
+          newdes1= lhs::randomLHS(nmissing, k = k)
+        } else if(!is.numeric(newdes1)){
+          cat0("Newdes ni numeric...")
+          #browser()
+          og_newdes1 = newdes1
+          newdes1= lhs::randomLHS(nmissing, k = k)
+        } else {
+          #vse je ok, nadaljujemo
+          break
+        }
+        stability_iter = stability_iter + 1
+        
       }
-      
+     
       
       newres1 = makeDataFrame(nmissing, k, col.types = types.df)
       tryCatch({
@@ -174,6 +194,11 @@ function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE,
                         types.int, lower2, upper2, values)
       }, error=function(e){
         cat0("Error v prvem C callu generateDesign | ",as.character(e))
+        
+        readr::write_rds(x = environment(),path = "DebugGenDes3.RDS")
+        readr::write_rds(x = parent.env(environment()),path = "DebugGenDes3p.RDS")
+        print(newdes1)
+        print(newres1)
         browser()
         stop(as.character(e))
       })
@@ -208,7 +233,7 @@ function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE,
       if (nmissing == 0L) 
         break
     }
-    if (nrow(res) < n) 
+    if (nrow(res) < 25) 
       warningf("generateDesign could only produce %i points instead of %i!", 
                nrow(res), n)
     colnames(res) = pids
@@ -224,6 +249,7 @@ function (n = 10L, par.set, fun, fun.args = list(), trafo = FALSE,
   })
   return(res_error)
 }
+
 
 
 #trace(generateDesign, edit=T)
